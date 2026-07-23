@@ -27,7 +27,6 @@ import com.android.volley.toolbox.JsonArrayRequest;
 import com.android.volley.toolbox.JsonObjectRequest;
 import com.android.volley.toolbox.Volley;
 
-import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -47,21 +46,21 @@ public class MainActivity extends AppCompatActivity {
     private Spinner spinnerHistory;
     private RequestQueue requestQueue;
     private String currentUsername = "";
-    private String currentDomain = "vwi2.com";
+    private String currentDomain = "1secmail.com";
     private Handler autoRefreshHandler = new Handler(Looper.getMainLooper());
     private Runnable autoRefreshRunnable;
 
-    // Working stealth domains that bypass Mozilla/Google blocks
     private List<String> domainList = new ArrayList<>(Arrays.asList(
-            "vwi2.com",
-            "esi2.com",
-            "wwi2.com",
             "1secmail.com",
             "1secmail.org",
-            "1secmail.net"
+            "1secmail.net",
+            "vwi2.com",
+            "esi2.com",
+            "wwi2.com"
     ));
 
     private List<String> historyList = new ArrayList<>();
+    private HashSet<Integer> loadedMsgIds = new HashSet<>();
     private ArrayAdapter<String> historyAdapter;
     private SharedPreferences prefs;
 
@@ -93,7 +92,7 @@ public class MainActivity extends AppCompatActivity {
         btnDelete.setOnClickListener(v -> generateRandomEmail());
 
         btnRefresh.setOnClickListener(v -> {
-            Toast.makeText(this, "Checking for OTP...", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Checking inbox...", Toast.LENGTH_SHORT).show();
             checkInbox();
         });
 
@@ -113,10 +112,10 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void run() {
                 checkInbox();
-                autoRefreshHandler.postDelayed(this, 4000);
+                autoRefreshHandler.postDelayed(this, 8000); // 8 seconds to prevent server rate-limiting
             }
         };
-        autoRefreshHandler.postDelayed(autoRefreshRunnable, 4000);
+        autoRefreshHandler.postDelayed(autoRefreshRunnable, 8000);
     }
 
     private void setupHistory() {
@@ -137,6 +136,7 @@ public class MainActivity extends AppCompatActivity {
                         currentUsername = parts[0].trim();
                         currentDomain = parts[1].trim();
                         tvCurrentEmail.setText(selectedEmail);
+                        resetInboxView();
                         checkInbox();
                     }
                 }
@@ -157,6 +157,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void resetInboxView() {
+        loadedMsgIds.clear();
+        tvInboxStatus.setText("Inbox Messages (0)");
+        tvInboxContent.setText("Waiting for messages...");
+    }
+
     private void generateRandomEmail() {
         String chars = "abcdefghijklmnopqrstuvwxyz1234567890";
         StringBuilder sb = new StringBuilder();
@@ -166,13 +172,13 @@ public class MainActivity extends AppCompatActivity {
             sb.append(chars.charAt(index));
         }
 
-        // Always prefer bypass domains first for 100% OTP delivery
-        currentDomain = domainList.get(rnd.nextInt(3)); // Picks vwi2.com, esi2.com, or wwi2.com
+        currentDomain = domainList.get(rnd.nextInt(domainList.size()));
         currentUsername = sb.toString();
         String fullEmail = currentUsername + "@" + currentDomain;
 
         tvCurrentEmail.setText(fullEmail);
         saveToHistory(fullEmail);
+        resetInboxView();
         checkInbox();
     }
 
@@ -194,7 +200,7 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public Map<String, String> getHeaders() {
                 Map<String, String> headers = new HashMap<>();
-                headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile)");
+                headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
                 return headers;
             }
         };
@@ -228,6 +234,7 @@ public class MainActivity extends AppCompatActivity {
             String fullEmail = currentUsername + "@" + currentDomain;
             tvCurrentEmail.setText(fullEmail);
             saveToHistory(fullEmail);
+            resetInboxView();
             checkInbox();
             dialog.dismiss();
         });
@@ -243,25 +250,34 @@ public class MainActivity extends AppCompatActivity {
                 response -> {
                     if (response.length() == 0) {
                         tvInboxStatus.setText("Inbox Messages (0)");
-                        tvInboxContent.setText("Waiting for OTP / Emails...\n(Auto refreshing every 4s)");
+                        if (loadedMsgIds.isEmpty()) {
+                            tvInboxContent.setText("No messages received yet...\n(Auto checking every 8s)");
+                        }
                     } else {
                         tvInboxStatus.setText("Inbox Messages (" + response.length() + ")");
-                        tvInboxContent.setText(""); // Clear previous text
+                        if (loadedMsgIds.isEmpty()) {
+                            tvInboxContent.setText(""); // Clear initial placeholder on first mail
+                        }
                         for (int i = 0; i < response.length(); i++) {
                             try {
                                 JSONObject obj = response.getJSONObject(i);
                                 int msgId = obj.getInt("id");
-                                fetchFullMessage(msgId);
+                                if (!loadedMsgIds.contains(msgId)) {
+                                    loadedMsgIds.add(msgId);
+                                    fetchFullMessage(msgId);
+                                }
                             } catch (JSONException e) {
                                 e.printStackTrace();
                             }
                         }
                     }
-                }, error -> {}) {
+                }, error -> {
+                    Toast.makeText(MainActivity.this, "Inbox Check Error: " + error.getMessage(), Toast.LENGTH_SHORT).show();
+                }) {
             @Override
             public Map<String, String> getHeaders() {
                 Map<String, String> headers = new HashMap<>();
-                headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile)");
+                headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
                 return headers;
             }
         };
@@ -286,24 +302,26 @@ public class MainActivity extends AppCompatActivity {
                         } else if (!htmlBody.trim().isEmpty()) {
                             finalMessage = Html.fromHtml(htmlBody, Html.FROM_HTML_MODE_LEGACY).toString();
                         } else {
-                            finalMessage = "Empty Body";
+                            finalMessage = "No body content available.";
                         }
 
                         String formatted = "📩 FROM: " + from + "\n" +
                                 "📌 SUBJECT: " + subject + "\n" +
                                 "🕒 DATE: " + date + "\n\n" +
-                                "🔑 OTP / MESSAGE:\n" + finalMessage + "\n\n" +
+                                "🔑 CONTENT / OTP:\n" + finalMessage + "\n\n" +
                                 "===================================\n\n";
 
                         tvInboxContent.append(formatted);
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
-                }, error -> {}) {
+                }, error -> {
+                    Toast.makeText(MainActivity.this, "Message Fetch Error: " + error.getMessage(), Toast.LENGTH_SHORT).show();
+                }) {
             @Override
             public Map<String, String> getHeaders() {
                 Map<String, String> headers = new HashMap<>();
-                headers.put("User-Agent", "Mozilla/5.0 (Linux; Android 10; Mobile)");
+                headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
                 return headers;
             }
         };
