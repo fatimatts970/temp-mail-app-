@@ -7,6 +7,7 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.Html;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.AdapterView;
@@ -35,16 +36,17 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 public class MainActivity extends AppCompatActivity {
 
     private TextView tvCurrentEmail, tvInboxContent, tvInboxStatus;
-    private Button btnDelete, btnRandom, btnChoose, btnCopy;
+    private Button btnDelete, btnRandom, btnChoose, btnCopy, btnRefresh;
     private Spinner spinnerHistory;
     private RequestQueue requestQueue;
     private String currentUsername = "";
-    private String currentDomain = "";
+    private String currentDomain = "1secmail.com";
     private Handler autoRefreshHandler = new Handler(Looper.getMainLooper());
     private Runnable autoRefreshRunnable;
     private List<String> domainList = new ArrayList<>();
@@ -68,6 +70,7 @@ public class MainActivity extends AppCompatActivity {
         btnRandom = findViewById(R.id.btnRandom);
         btnChoose = findViewById(R.id.btnChoose);
         btnCopy = findViewById(R.id.btnCopy);
+        btnRefresh = findViewById(R.id.btnRefresh);
 
         requestQueue = Volley.newRequestQueue(this);
 
@@ -76,8 +79,12 @@ public class MainActivity extends AppCompatActivity {
         generateRandomEmail();
 
         btnRandom.setOnClickListener(v -> generateRandomEmail());
-
         btnDelete.setOnClickListener(v -> generateRandomEmail());
+
+        btnRefresh.setOnClickListener(v -> {
+            Toast.makeText(this, "Refreshing inbox...", Toast.LENGTH_SHORT).show();
+            checkInbox();
+        });
 
         btnCopy.setOnClickListener(v -> {
             String fullEmail = tvCurrentEmail.getText().toString();
@@ -98,7 +105,7 @@ public class MainActivity extends AppCompatActivity {
                 autoRefreshHandler.postDelayed(this, 5000);
             }
         };
-        autoRefreshHandler.postDelayed(autoRefreshRunnable, 3000);
+        autoRefreshHandler.postDelayed(autoRefreshRunnable, 5000);
     }
 
     private void setupHistory() {
@@ -140,29 +147,22 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void generateRandomEmail() {
-        String url = "https://www.1secmail.com/api/v1/?action=genRandomMailbox&count=1";
-        JsonArrayRequest request = new JsonArrayRequest(Request.Method.GET, url, null,
-                response -> {
-                    try {
-                        String fullEmail = response.getString(0);
-                        tvCurrentEmail.setText(fullEmail);
-                        String[] parts = fullEmail.split("@");
-                        currentUsername = parts[0];
-                        currentDomain = parts[1];
-                        saveToHistory(fullEmail);
-                        checkInbox();
-                    } catch (JSONException e) {
-                        e.printStackTrace();
-                    }
-                }, error -> Toast.makeText(MainActivity.this, "Network Error, Retrying...", Toast.LENGTH_SHORT).show()) {
-            @Override
-            public Map<String, String> getHeaders() {
-                Map<String, String> headers = new HashMap<>();
-                headers.put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-                return headers;
-            }
-        };
-        requestQueue.add(request);
+        String chars = "abcdefghijklmnopqrstuvwxyz1234567890";
+        StringBuilder sb = new StringBuilder();
+        Random rnd = new Random();
+        while (sb.length() < 10) {
+            int index = (int) (rnd.nextFloat() * chars.length());
+            sb.append(chars.charAt(index));
+        }
+        
+        String domain = domainList.isEmpty() ? "1secmail.com" : domainList.get(rnd.nextInt(domainList.size()));
+        currentUsername = sb.toString();
+        currentDomain = domain;
+        String fullEmail = currentUsername + "@" + currentDomain;
+
+        tvCurrentEmail.setText(fullEmail);
+        saveToHistory(fullEmail);
+        checkInbox();
     }
 
     private void fetchDomains() {
@@ -177,7 +177,13 @@ public class MainActivity extends AppCompatActivity {
                             e.printStackTrace();
                         }
                     }
-                }, error -> {}) {
+                }, error -> {
+                    if (domainList.isEmpty()) {
+                        domainList.add("1secmail.com");
+                        domainList.add("1secmail.org");
+                        domainList.add("1secmail.net");
+                    }
+                }) {
             @Override
             public Map<String, String> getHeaders() {
                 Map<String, String> headers = new HashMap<>();
@@ -237,7 +243,7 @@ public class MainActivity extends AppCompatActivity {
                 response -> {
                     if (response.length() == 0) {
                         tvInboxStatus.setText("Inbox Messages (0)");
-                        tvInboxContent.setText("Waiting for incoming emails...\n(Auto refreshing every 5s)");
+                        tvInboxContent.setText("No messages received yet...\n(Click REFRESH 🔄 or wait 5s)");
                     } else {
                         tvInboxStatus.setText("Inbox Messages (" + response.length() + ")");
                         tvInboxContent.setText("");
@@ -270,13 +276,24 @@ public class MainActivity extends AppCompatActivity {
                         String from = response.getString("from");
                         String subject = response.getString("subject");
                         String date = response.getString("date");
-                        String textBody = response.optString("textBody", "No text content");
+                        
+                        String textBody = response.optString("textBody", "");
+                        String htmlBody = response.optString("htmlBody", "");
+
+                        String bodyContent = "";
+                        if (!textBody.trim().isEmpty()) {
+                            bodyContent = textBody;
+                        } else if (!htmlBody.trim().isEmpty()) {
+                            bodyContent = Html.fromHtml(htmlBody, Html.FROM_HTML_MODE_LEGACY).toString();
+                        } else {
+                            bodyContent = "No message body found.";
+                        }
 
                         String formattedMsg = "📩 FROM: " + from + "\n" +
                                 "📌 SUBJECT: " + subject + "\n" +
                                 "🕒 DATE: " + date + "\n\n" +
-                                "💬 MESSAGE / OTP:\n" + textBody + "\n\n" +
-                                "===================================\n\n";
+                                "💬 CODE / MESSAGE:\n" + bodyContent + "\n\n" +
+                                "-----------------------------------\n\n";
 
                         tvInboxContent.append(formattedMsg);
                     } catch (JSONException e) {
